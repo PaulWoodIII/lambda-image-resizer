@@ -1,9 +1,9 @@
 {
   "name": "lambda-image-resizer",
   "version": "0.0.0",
-  "description": "A chat example to showcase how to use `socket.io` with a static `express` server with `async` for control flow.",
+  "description": "I always thought that AWS S3 should just resize your images when you put them into a bucket. It doesn't. However with the new Lambda service it can.  ",
   "main": "handler.js",
-  "repository": "",
+  "repository": "https://github.com/PaulWoodIII/lambda-image-resizer.git",
   "author": "Paul Wood III <paul@paulwoodiii.com>",
   "dependencies": {
     "async": "~0.2.8",
