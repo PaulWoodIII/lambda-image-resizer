@@ -1,161 +1,129 @@
 // dependencies
+var async = require('async');
 var AWS = require('aws-sdk');
-var gm = require('gm').subClass({
-    imageMagick: true
-});
-var fs = require("fs");
-var tmp = require("tmp");
-var async = require("async");
-
-// get reference to S3 client
 var s3 = new AWS.S3();
+var gm = require('gm')
+    .subClass({
+        imageMagick: true
+    }); // Enable ImageMagick integration. Built into Lambda
+var util = require('util');
 
-var _800px = {
-    width: 800,
-    destinationPath: "large"
-};
+// constants
+var sizeConfigs = [{
+    postfix: '_w1000',
+    width: 1000
+}, {
+    postfix: '_w480',
+    width: 480,
+}, {
+    postfix: '_w200',
+    width: 200
+}, {
+    postfix: '_w100',
+    width: 100
+}];
 
-var _500px = {
-    width: 500,
-    destinationPath: "medium"
-};
+exports.handler = function(event, context) {
 
-var _200px = {
-    width: 200,
-    destinationPath: "small"
-};
-
-var _45px = {
-    width: 45,
-    destinationPath: "thumbnail"
-};
-
-var _sizesArray = [_800px, _500px, _200px, _45px];
-
-var len = _sizesArray.length;
-
-exports.AwsHandler = function(event) {
-    // Read options from the event.
-    var destinationBucket = 'shazart-images';
     var srcBucket = event.Records[0].s3.bucket.name;
     var srcKey = event.Records[0].s3.object.key;
-    var dstnKey = srcKey;
+    var dstBucket = "destination-bucket";
+    var elements = srcKey.split('.');
+    var dstFolderName = elements[0];
+    
+    if(dstFolderName==null){
+        return context.fail();
+    }
 
-    // create temporary directory
-    var tmpobj = tmp.dirSync();
+    // Sanity check: validate that source and destination are different buckets.
+    if (srcBucket == dstBucket) {
+        console.error("Destination bucket must not match source bucket.");
+        return context.fail();
+    }
 
-    // function to determine paths
-    function _filePath(directory, i) {
-        if (!directory) {
-            return "dst/" + _sizesArray[i].destinationPath + "/" + dstnKey;
-        }
-        else {
-            return directory + "/dst/" + _sizesArray[i].destinationPath + "/" + dstnKey;
-        }
-    };
-
-    // Infer the image type.
     var typeMatch = srcKey.match(/\.([^.]*)$/);
     if (!typeMatch) {
         console.error('unable to infer image type for key ' + srcKey);
-        return;
-    };
-
-    var imageType = typeMatch[1];
-
-    if (imageType != "jpg" && imageType != "png") {
+        return context.fail();
+    }
+    
+    var imageType = typeMatch[1].toLowerCase();
+    if (imageType != "jpg" && imageType != "jpeg" && imageType != "png") {
         console.log('skipping non-image ' + srcKey);
-        return;
-    };
-
-
-    // Actually call resizeImage, the main pipeline function:
-    resizeImage(function(err) {
-        // Done. Manual cleanup of temporary directory
-        tmpobj.removeCallback();
-    })
-
-
-    function resizeImage(callback) {
-        var s3obj = {
-            Bucket: srcBucket,
-            Key: srcKey
-        };
-        download(s3obj, function(response) {
-            var gmConfigs = sizesArray.map(function(size, i) {
-                return {
-                    width: size.width,
-                    _Key: _filePath(tmpobj, i)
-                }
-            })
-
-            async.eachSeries(gmConfigs,
-                function(config, done) {
-                    transform(response, config.width, config._Key, done)
-                },
-                function(err) {
-                    if (err) {
-                        console.log(err);
-                    }
-                    else {
-                        upLoad();
-                        // Further work is required to identify if all the uploads worked,
-                        // and to know when to call callback() here
-                        // callback();
-                    }
-                })
-        })
+        return context.fail();
     }
 
-    function download(s3obj, callback) {
-        console.log("started!");
-
-        s3.getObject(s3obj, function(err, response) {
-            if (err) {
-                console.error(err);
-            }
-            // call transform if successful
-            callback(response);
-        });
-    };
-
-    function transform(response, width, _Key, callback) {
-        // resize images
-        gm(response.Body, srcKey)
-            .resize(width)
-            .write(_Key, function(err) {
-                if (err) {
-                    console.error(err);
-                }
-                callback();
+    // Download the image from S3, transform, and upload to a different S3 bucket.
+    async.waterfall([
+        function download(next) {
+            s3.getObject({
+                    Bucket: srcBucket,
+                    Key: srcKey
+                },
+                next);
+        },
+        function tranform(response, next) {
+            async.map(sizeConfigs, resize, function(err, mapped) {
+                next(err, mapped);
             });
-    };
 
-    function upLoad() {
-        for (var i = 0; i < len; i++) {
-            var readPath = _filePath(tmpobj, i);
-            var writePath = _filePath(i);
-            // read file from temp directory
-            fs.readFile(readPath, function(err, data) {
-                if (err) {
-                    console.error(err);
-                }
+            function resize(config, callback) {
+                gm(response.Body)
+                    .size(function(err, size) {
+                        if(err){next(err);}
+                        
+                        var width = config.width;
+                        var height = null;
 
-                // upload images to s3 bucket
-                s3.putObject({
-                        Bucket: destinationBucket,
-                        Key: writePath,
-                        Body: data,
-                        ContentType: data.type
-                    },
-                    function(err) {
-                        if (err) {
-                            console.error(err);
-                        }
-                        console.log("Uploaded with success!");
+                        this.resize(width, height)
+                            .toBuffer('jpg', function(err, buffer) {
+                                //  console.log('toBuffer');
+                                if (err) {
+                                    console.error(err);
+                                    callback(err);
+                                }
+                                else {
+                                    var obj = config;
+                                    obj.contentType = 'image/jpeg';
+                                    obj.data = buffer;
+                                    var withPostFix = dstFolderName + config.postfix + '.' + 'jpg';
+                                    obj.dstKey = dstFolderName + '/' + withPostFix;
+                                    callback(null, obj);
+                                }
+                            });
                     });
-            })
-        }
-    };
+            }
+        },
+        function upload(items, next) {
 
+            async.each(items,
+                function(item, callback) {
+                    s3.putObject({
+                        Bucket: dstBucket,
+                        Key: item.dstKey,
+                        Body: item.data,
+                        ContentType: item.contentType
+                    }, callback);
+                },
+                function(err) {
+                    next(err);
+                });
+
+        }
+    ], function(err) {
+        if (err) {
+            console.error(
+                'Unable to resize ' + srcBucket + '/' + srcKey +
+                ' and upload to ' + dstBucket + '/' + dstFolderName +
+                ' due to an error: ' + err
+            );
+        }
+        else {
+            console.log(
+                'Successfully resized ' + srcBucket + '/' + srcKey +
+                ' and uploaded to ' + dstBucket + '/' + dstFolderName + '/'+dstFolderName+'[postFix].jpg'
+            );
+            context.done();
+        }
+    });
 };
