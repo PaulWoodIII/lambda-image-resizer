@@ -41,9 +41,9 @@ The code found in this project was inspired by this [amazon documenation](https:
 
 ###Setup
 
-Setup AWS Lambda, if you don't know how to do this there is a [Getting Started](1) guide from Amazon.
+Setup AWS Lambda, if you don't know how to do this there is a [Getting Started][1] guide from Amazon.
 
-[1](https://docs.aws.amazon.com/lambda/latest/dg/getting-started.html)
+[1]: https://docs.aws.amazon.com/lambda/latest/dg/getting-started.html        
 
 To test your changes on this repository you should install [node-lambda](https://github.com/RebelMail/node-lambda). This is a really simple command line utility to test your lambda funcation and post the function to AWS.
 
